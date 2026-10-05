@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>通信の点検</title>
+<style>
+  :root { --ink: #111827; --sub: #6B7280; --ok: #15803D; --ng: #C62828; --line: #D1D5DB; }
+  body { margin: 0; background: #fff; color: var(--ink); font: 16px/1.6 -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 8px 0 4px; }
+  p { color: var(--sub); margin: 0 0 12px; font-size: 14px; }
+  ol { padding-left: 20px; }
+  li { margin: 0 0 10px; }
+  .ok { color: var(--ok); font-weight: 700; }
+  .ng { color: var(--ng); font-weight: 700; }
+  .wait { color: var(--sub); }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: #F3F4F6; padding: 10px; border-radius: 8px; }
+  button { font-size: 15px; padding: 10px 18px; border-radius: 999px; border: 1.5px solid #2F54EB; background: #2F54EB; color: #fff; font-weight: 700; }
+</style>
+</head>
+<body>
+<main>
+  <h1>通信の点検</h1>
+  <p>開くと自動で4つ試します。全部終わったら、この画面のスクリーンショットを送ってください（パスワードは使いません）。</p>
+  <ol id="list"></ol>
+  <button id="copy" type="button">結果をコピー</button>
+  <pre id="raw"></pre>
+</main>
+<script>
+(function () {
+  "use strict";
+  var API = "https://script.google.com/macros/s/AKfycbzvJ83NjjKaq6M4XZtqAXL15i9ZB0w7pc1DJZ74qpMU1a8T-15eMbslHb8uXKLfoT9y/exec";
+  var lines = [];
+  function add(label) {
+    var li = document.createElement("li");
+    li.innerHTML = "";
+    li.appendChild(document.createTextNode(label + "："));
+    var s = document.createElement("span");
+    s.className = "wait";
+    s.textContent = "試しています…";
+    li.appendChild(s);
+    document.getElementById("list").appendChild(li);
+    return function (ok, text) {
+      s.className = ok ? "ok" : "ng";
+      s.textContent = (ok ? "OK " : "NG ") + text;
+      lines.push(label + "：" + (ok ? "OK " : "NG ") + text);
+      document.getElementById("raw").textContent = lines.join("\n") + "\n\n" + navigator.userAgent;
+    };
+  }
+  function errText(e) { return (e && (e.name + ": " + e.message)) || String(e); }
+  function timeout(ms) { return new Promise(function (_, rej) { setTimeout(function () { rej(new Error("時間切れ（" + ms / 1000 + "秒）")); }, ms); }); }
+
+  var steps = [
+    ["1 Googleに届くか（中身は見ない）", function () {
+      return fetch(API + "?check=1", { mode: "no-cors" }).then(function (r) { return "届いた（" + r.type + "）"; });
+    }],
+    ["2 点検の答えを受け取れるか（GET）", function () {
+      return fetch(API + "?check=1").then(function (r) { return r.text().then(function (t) { return "status " + r.status + " / " + t.slice(0, 60); }); });
+    }],
+    ["3 窓口に送って答えを受け取れるか（POST）", function () {
+      return fetch(API, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ fn: "getBoard", args: ["", ""] }) })
+        .then(function (r) { return r.text().then(function (t) { return "status " + r.status + " / " + t.slice(0, 80); }); });
+    }],
+    ["4 Content-Typeなしで送った場合（POST）", function () {
+      return fetch(API, { method: "POST", body: JSON.stringify({ fn: "getBoard", args: ["", ""] }) })
+        .then(function (r) { return r.text().then(function (t) { return "status " + r.status + " / " + t.slice(0, 80); }); });
+    }]
+  ];
+  var i = 0;
+  function next() {
+    if (i >= steps.length) return;
+    var st = steps[i++];
+    var done = add(st[0]);
+    Promise.race([st[1](), timeout(30000)]).then(function (t) { done(true, t); }, function (e) { done(false, errText(e)); }).then(next);
+  }
+  document.getElementById("copy").addEventListener("click", function () {
+    var t = document.getElementById("raw").textContent;
+    try { navigator.clipboard.writeText(t); this.textContent = "コピーしました"; } catch (e) { this.textContent = "コピーできませんでした"; }
+  });
+  next();
+})();
+</script>
+</body>
+</html>
