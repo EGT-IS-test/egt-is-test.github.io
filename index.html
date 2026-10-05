@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://script.google.com">
+<link rel="preconnect" href="https://script.googleusercontent.com">
 <title>IS確認テスト</title>
 <style>
   :root {
@@ -373,6 +375,23 @@
   }
   function errText(err) { return String((err && err.message) || err || "").replace(/^(Error|Exception|ScriptError):\s*/i, ""); }
   function needLogin(err) { return errText(err).indexOf("NEED_LOGIN") >= 0; }
+  // 問題・名簿・注意文を端末に覚えておく（版が同じなら、次からは受け取り直さない＝開いてすぐ使える）
+  var DATA_KEY = "is-kakunin-test-data";
+  function dataGet() {
+    try { var d = JSON.parse(localStorage.getItem(DATA_KEY) || "null"); return d && d.ver && d.quiz && d.names ? d : null; } catch (e) { return null; }
+  }
+  function dataSet(d) {
+    var old = dataGet() || {};
+    var nd = { ver: d.ver || old.ver, quiz: d.quiz || old.quiz, ngWords: d.ngWords || old.ngWords || [], names: d.names || old.names };
+    try { localStorage.setItem(DATA_KEY, JSON.stringify(nd)); } catch (e) { /* 覚えられなくても動く */ }
+    return nd;
+  }
+  function cachedVer() { var d = dataGet(); return d ? d.ver : ""; }
+  // Google 側は、しばらく使われないと1回目だけ4秒ほどかかる。パスワード入力中・回の開始時に軽く呼んで起こしておく
+  function warm() {
+    if (!BOOT.api) return;
+    try { fetch(BOOT.api + "?ping=1", { mode: "no-cors" }).catch(function () {}); } catch (e) { /* 起こせなくても動く */ }
+  }
   // 前に選んだ名前（ログインのときに一緒に送ると、成績とランキングも1回で届く）
   function savedName() {
     if (BOOT.preset) return BOOT.preset;
@@ -404,6 +423,7 @@
     $("loginMsg").textContent = msg || "";
     $("pwInput").value = "";
     window.scrollTo(0, 0);
+    warm();
   }
   function finishLogin(d) {
     tokenSet(d.token);
@@ -424,7 +444,7 @@
     btn.disabled = true;
     msg.className = "login-msg wait";
     msg.textContent = "確かめています…";
-    run("login", [pw, savedName()], function (d) {
+    run("login", [pw, savedName(), cachedVer()], function (d) {
       btn.disabled = false;
       msg.textContent = "";
       finishLogin(d);
@@ -445,23 +465,56 @@
     });
   }
 
+  var app = null;   // テスト本体（動き出したら、あとから届いた成績・ランキングをここに渡す）
   function begin(d) {
-    BOOT.names = d.names || [];
-    BOOT.quiz = d.quiz || [];
-    BOOT.ngWords = d.ngWords || [];
+    var data = d.quiz ? dataSet(d) : dataGet();
+    if (!data || !data.quiz) {
+      // 端末の問題が消えていた（めったにない）：版を送らずに取り直す
+      run("resume", [d.token, savedName(), ""], begin, function () { showLogin("読み込めませんでした。もう一度入れてください。", begin); });
+      return;
+    }
+    if (d.names && !d.quiz) dataSet({ names: d.names });
+    if (app) { app.apply(d); return; }
+    BOOT.ver = data.ver;
+    BOOT.names = d.names || data.names || [];
+    BOOT.quiz = data.quiz;
+    BOOT.ngWords = data.ngWords || [];
     BOOT.ranking = d.ranking || null;   // ログインと一緒に届いたランキング
     BOOT.board = d.board || null;       // 　〃　本人の成績（{ name, scores }）
     $("viewHome").hidden = false;
-    startApp();
+    app = startApp();
   }
 
+  var quick = BOOT.api && tokenGet() ? dataGet() : null;
   if (!hasServer || !BOOT.login) {
     // プレビュー版（問題は埋め込み済み・記録しない）
     $("viewHome").hidden = false;
     startApp();
+  } else if (quick) {
+    // 2回目から：端末に覚えた問題と前回の結果で、すぐ始める。パスワードの印の確認と最新の成績・ランキングは裏で
+    BOOT.ver = quick.ver;
+    BOOT.names = quick.names;
+    BOOT.quiz = quick.quiz;
+    BOOT.ngWords = quick.ngWords || [];
+    BOOT.waitName = savedName();   // この名前の成績は、開き直しの確認と一緒に届く
+    $("viewHome").hidden = false;
+    app = startApp();
+    run("resume", [tokenGet(), savedName(), quick.ver], function (d) {
+      BOOT.waitName = "";
+      tokenSet(d.token);
+      var changed = !!d.quiz || JSON.stringify(d.names || []) !== JSON.stringify(quick.names || []);
+      dataSet(d);
+      // 問題か名簿が変わっていたら、トップ画面にいるときだけ開き直して反映（解いている途中なら次に開いたとき）
+      if (changed && !$("viewHome").hidden) { location.reload(); return; }
+      app.apply(d);
+    }, function (err) {
+      BOOT.waitName = "";
+      if (needLogin(err)) { tokenSet(""); showLogin("", begin); return; }
+      app.offline();
+    });
   } else if (tokenGet()) {
     $("viewLoading").hidden = false;
-    run("resume", [tokenGet(), savedName()], function (d) {
+    run("resume", [tokenGet(), savedName(), cachedVer()], function (d) {
       $("viewLoading").hidden = true;
       tokenSet(d.token);
       begin(d);
@@ -635,6 +688,10 @@
       if (old) { me.scores = old.scores || {}; me.ranking = old.ranking || {}; }
       renderHome();
       $("nameNote").textContent = old ? ready + "（最新の結果を確かめています…）" : "これまでの結果を読み込んでいます…";
+      if (BOOT.waitName && BOOT.waitName === name) return;   // 開き直しの確認と一緒に届く（app.apply）
+      fetchBoard(name, old, ready);
+    }
+    function fetchBoard(name, old, ready) {
       api.board(name, function (b) {
         if (me.name !== name) return;
         me.scores = (b && b.scores) || {};
@@ -742,6 +799,7 @@
     var state = null;
 
     function startRound(round, onlyIdx) {
+      warm();
       if (!me.name) return;
       if ($("leaveBox")) $("leaveBox").remove();
       var idxs = onlyIdx || round.questions.map(function (_, i) { return i; });
@@ -1122,6 +1180,26 @@
     foldHowtoOnPhone();
     window.addEventListener("load", foldHowtoOnPhone);
     setupNames();
+
+    // 外から使う口：開き直しの確認と一緒に届いた成績・ランキングを反映する／通信できなかったときの表示
+    return {
+      apply: function (d) {
+        if (d.ranking) me.ranking = d.ranking;
+        if (!me.name) { if (!views.home.hidden) renderHome(); return; }
+        var ready = "結果は「" + me.name + "」さんとして記録されます。";
+        if (d.board && d.board.name === me.name) {
+          me.scores = d.board.scores || {};
+          boardSet();
+          $("nameNote").textContent = ready;
+        } else {
+          fetchBoard(me.name, boardGet(me.name), ready);   // 届いたのが別の名前の分なら、今の名前で聞き直す
+        }
+        if (!views.home.hidden) renderHome();
+      },
+      offline: function () {
+        if (me.name) $("nameNote").textContent = "結果は「" + me.name + "」さんとして記録されます。（いま通信できないため、前回の結果を表示しています）";
+      }
+    };
   }
 })();
 </script>
