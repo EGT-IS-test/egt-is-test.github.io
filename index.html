@@ -373,6 +373,11 @@
   }
   function errText(err) { return String((err && err.message) || err || "").replace(/^(Error|Exception|ScriptError):\s*/i, ""); }
   function needLogin(err) { return errText(err).indexOf("NEED_LOGIN") >= 0; }
+  // 前に選んだ名前（ログインのときに一緒に送ると、成績とランキングも1回で届く）
+  function savedName() {
+    if (BOOT.preset) return BOOT.preset;
+    try { return localStorage.getItem("is-kakunin-test-name") || ""; } catch (e) { return ""; }
+  }
   function run(fn, args, ok, ng) {
     if (BOOT.api) {
       // 文字だけで送ると、別の場所からでも事前の問い合わせなしで送れる（Content-Type: text/plain）
@@ -419,7 +424,7 @@
     btn.disabled = true;
     msg.className = "login-msg wait";
     msg.textContent = "確かめています…";
-    run("login", [pw], function (d) {
+    run("login", [pw, savedName()], function (d) {
       btn.disabled = false;
       msg.textContent = "";
       finishLogin(d);
@@ -444,6 +449,8 @@
     BOOT.names = d.names || [];
     BOOT.quiz = d.quiz || [];
     BOOT.ngWords = d.ngWords || [];
+    BOOT.ranking = d.ranking || null;   // ログインと一緒に届いたランキング
+    BOOT.board = d.board || null;       // 　〃　本人の成績（{ name, scores }）
     $("viewHome").hidden = false;
     startApp();
   }
@@ -454,7 +461,7 @@
     startApp();
   } else if (tokenGet()) {
     $("viewLoading").hidden = false;
-    run("resume", [tokenGet()], function (d) {
+    run("resume", [tokenGet(), savedName()], function (d) {
       $("viewLoading").hidden = true;
       tokenSet(d.token);
       begin(d);
@@ -524,7 +531,9 @@
     }
     var api = hasServer ? {
       board: function (name, ok, ng) { call("getBoard", [name], ok, ng); },
-      save: function (p, ok, ng) { call("saveResult", [p], ok, ng); }
+      save: function (p, ok, ng) { call("saveResult", [p], ok, ng); },
+      // 記録のあと：スプシの本人のタブと分析を更新してもらう（画面は待たない・失敗しても次の記録で追いつく）
+      after: function (name) { call("afterSave", [name], function () {}, function () {}); }
     } : {
       board: function (name, ok) { setTimeout(function () { ok({ scores: mockStore[name] || {}, ranking: mockRanking() }); }, 0); },
       save: function (p, ok) {
@@ -597,22 +606,45 @@
       sel.addEventListener("change", function () { chooseName(sel.value); });
       chooseName(sel.value);
     }
+    // 前に見た成績とランキングを端末に覚えておき、次に開いたときはまずそれを出す（そのあと新しいものに差し替える）
+    var BOARD_KEY = "is-kakunin-test-board";
+    function boardGet(name) {
+      try { var b = JSON.parse(localStorage.getItem(BOARD_KEY) || "null"); return b && b.name === name ? b : null; } catch (e) { return null; }
+    }
+    function boardSet() {
+      try { localStorage.setItem(BOARD_KEY, JSON.stringify({ name: me.name, scores: me.scores, ranking: me.ranking })); } catch (e) { /* 使えなくても動く */ }
+    }
     function chooseName(name) {
       me.name = name;
       me.scores = {};
       storeSet(name);
       renderWho();
+      if (!name) { renderHome(); $("nameNote").textContent = "名前を選ぶと、回を選べるようになります。結果はこの名前で記録されます。"; return; }
+      var ready = "結果は「" + name + "」さんとして記録されます。";
+      // ログインと一緒に届いた分があれば、それをそのまま使う（サーバーに聞き直さない）
+      if (BOOT.board && BOOT.board.name === name) {
+        me.scores = BOOT.board.scores || {};
+        me.ranking = BOOT.ranking || {};
+        BOOT.board = null;
+        boardSet();
+        renderHome();
+        $("nameNote").textContent = ready;
+        return;
+      }
+      var old = boardGet(name);
+      if (old) { me.scores = old.scores || {}; me.ranking = old.ranking || {}; }
       renderHome();
-      if (!name) { $("nameNote").textContent = "名前を選ぶと、回を選べるようになります。結果はこの名前で記録されます。"; return; }
-      $("nameNote").textContent = "これまでの結果を読み込んでいます…";
+      $("nameNote").textContent = old ? ready + "（最新の結果を確かめています…）" : "これまでの結果を読み込んでいます…";
       api.board(name, function (b) {
         if (me.name !== name) return;
         me.scores = (b && b.scores) || {};
         me.ranking = (b && b.ranking) || {};
-        $("nameNote").textContent = "結果は「" + name + "」さんとして記録されます。";
+        boardSet();
+        $("nameNote").textContent = ready;
         renderHome();
       }, function () {
-        $("nameNote").textContent = "これまでの結果を読み込めませんでした（テストは解けます）。";
+        if (me.name !== name) return;
+        $("nameNote").textContent = old ? ready : "これまでの結果を読み込めませんでした（テストは解けます）。";
       });
     }
 
@@ -959,6 +991,8 @@
         st.saved = true;
         if (res && res.scores) me.scores = res.scores;
         if (res && res.ranking) me.ranking = res.ranking;
+        boardSet();
+        if (api.after) api.after(me.name);
         if (state !== st) return;
         if (hasServer) { box.className = "save-state ok"; box.textContent = "✓ 記録しました（" + me.name + " さん）"; }
       }, function () {
