@@ -23,7 +23,7 @@
 <body>
 <main>
   <h1>通信の点検</h1>
-  <p>開くと自動で4つ試します。全部終わったら、この画面のスクリーンショットを送ってください（パスワードは使いません）。</p>
+  <p>開くと自動で4つ試して、結果を自動で送ります（パスワードは使いません）。「結果を送りました」と出たら閉じて大丈夫です。</p>
   <ol id="list"></ol>
   <button id="copy" type="button">結果をコピー</button>
   <pre id="raw"></pre>
@@ -69,8 +69,18 @@
     }]
   ];
   var i = 0;
+  function report() {
+    // 結果を Google 側に送る（答えは読まない送り方なので、読み取りが止められていても届く）
+    var note = document.createElement("p");
+    note.textContent = "結果を送っています…";
+    document.querySelector("main").appendChild(note);
+    fetch(API, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ fn: "diag", args: [lines.join("\n") + "\n" + navigator.userAgent] }) })
+      .then(function () { note.textContent = "結果を送りました。この画面は閉じて大丈夫です。"; },
+        function (e) { note.textContent = "結果を送れませんでした（" + errText(e) + "）。スクリーンショットを送ってください。"; });
+  }
   function next() {
-    if (i >= steps.length) return;
+    if (i >= steps.length) { report(); return; }
     var st = steps[i++];
     var done = add(st[0]);
     Promise.race([st[1](), timeout(30000)]).then(function (t) { done(true, t); }, function (e) { done(false, errText(e)); }).then(next);
