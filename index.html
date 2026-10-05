@@ -392,6 +392,21 @@
     if (!BOOT.api) return;
     try { fetch(BOOT.api + "?ping=1", { mode: "no-cors" }).catch(function () {}); } catch (e) { /* 起こせなくても動く */ }
   }
+  // パスワード画面が出た理由などを Google 側に送る（「毎回聞かれる」の原因調べ用。ブラウザの種類と OK/NG だけ。パスワード・名前は送らない）
+  function report(what) {
+    if (!BOOT.api) return;
+    var ls = false;
+    try { localStorage.setItem("is-kakunin-test-probe", "1"); ls = localStorage.getItem("is-kakunin-test-probe") === "1"; localStorage.removeItem("is-kakunin-test-probe"); } catch (e) { ls = false; }
+    var standalone = false;
+    try { standalone = !!navigator.standalone || window.matchMedia("(display-mode: standalone)").matches; } catch (e) { /* わからなくてよい */ }
+    var ref = "";
+    try { ref = document.referrer ? new URL(document.referrer).host : ""; } catch (e) { /* わからなくてよい */ }
+    var info = what + " | 保存できる=" + ls + " | 印あり=" + !!tokenGet() + " | 問題の控えあり=" + !!dataGet() +
+      " | ホーム画面から=" + standalone + " | 開いた元=" + (ref || "なし") + " | " + location.host + " | " + navigator.userAgent;
+    try { fetch(BOOT.api, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ fn: "diag", args: [info] }) }).catch(function () {}); } catch (e) { /* 送れなくてよい */ }
+  }
+  // iPhone などで、保存した印や問題が消されにくくなるようお願いする（効かない端末もある）
+  function askPersist() { try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* 効かなくてよい */ } }
   // 前に選んだ名前（ログインのときに一緒に送ると、成績とランキングも1回で届く）
   function savedName() {
     if (BOOT.preset) return BOOT.preset;
@@ -427,6 +442,10 @@
   }
   function finishLogin(d) {
     tokenSet(d.token);
+    askPersist();
+    var saved = false;
+    try { saved = localStorage.getItem(TOKEN_KEY) === d.token; } catch (e) { saved = false; }
+    report("ログイン成功・印を保存できた=" + saved);
     $("viewLogin").hidden = true;
     document.body.classList.remove("logging-in");
     hiddenViews.forEach(function (id) { $(id).hidden = false; });
@@ -509,20 +528,29 @@
       app.apply(d);
     }, function (err) {
       BOOT.waitName = "";
-      if (needLogin(err)) { tokenSet(""); showLogin("", begin); return; }
+      if (needLogin(err)) { report("入口（すぐ表示のあと）：印がはじかれた"); tokenSet(""); showLogin("", begin); return; }
+      report("すぐ表示のあと：通信に失敗（" + errText(err) + "）");
       app.offline();
     });
   } else if (tokenGet()) {
     $("viewLoading").hidden = false;
-    run("resume", [tokenGet(), savedName(), cachedVer()], function (d) {
-      $("viewLoading").hidden = true;
-      tokenSet(d.token);
-      begin(d);
-    }, function (err) {
-      tokenSet("");
-      showLogin(needLogin(err) ? "" : "読み込めませんでした（" + errText(err) + "）。パスワードを入れてください。", begin);
-    });
+    var tries = 0;
+    var tryResume = function () {
+      run("resume", [tokenGet(), savedName(), cachedVer()], function (d) {
+        $("viewLoading").hidden = true;
+        tokenSet(d.token);
+        begin(d);
+      }, function (err) {
+        if (needLogin(err)) { report("入口：印がはじかれた"); tokenSet(""); showLogin("", begin); return; }
+        if (++tries < 2) { setTimeout(tryResume, 1500); return; }   // 通信の失敗は1回だけやり直す
+        report("入口：通信に失敗（" + errText(err) + "）");
+        // 印は消さない（電波が戻れば、開き直すだけで入れる）
+        showLogin("通信できませんでした。電波のよいところで開き直してください（パスワードを入れても入れます）。", begin);
+      });
+    };
+    tryResume();
   } else {
+    report("入口：印がない");
     showLogin("", begin);
   }
 
