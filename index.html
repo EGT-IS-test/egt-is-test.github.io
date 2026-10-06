@@ -80,6 +80,7 @@
   .round-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--sub); }
   .round-last { font-weight: 700; color: var(--body); text-align: right; }
   .round-last.perfect { color: var(--ok); }
+  .round-prog { font-weight: 700; color: var(--blue); text-align: right; }
 
   .qhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
   .qround { font-size: 13px; font-weight: 700; color: var(--blue); letter-spacing: .04em; }
@@ -308,6 +309,7 @@
         <li>名前を選び、上の切り替えで「確認テスト」「単語クイズ」「業界・部署クイズ」を選んで、解きたい回を選びます。</li>
         <li>4つの中から1つ選ぶと、すぐに正解と解説（お手本トーク）が出ます。書いて答える回は、お手本と見比べて自分で採点します。</li>
         <li>通しで全問正解すると、その回は「クリア」になってグレーに変わります。全部クリアを目指しましょう。</li>
+        <li>途中でやめても、答えはこの端末に保存されます。回の一覧の「途中」から続きを解けます。</li>
       </ol>
     </details>
     <div class="progress" id="progress" hidden>
@@ -768,6 +770,7 @@
     }
 
     function renderHome() {
+      if ($("resumeBox")) $("resumeBox").remove();
       renderGroupTabs();
       var rounds = roundsOf(me.group);
       var g = GROUPS.filter(function (x) { return x.key === me.group; })[0] || GROUPS[0];
@@ -794,7 +797,10 @@
         var meta = el("span", "round-meta");
         meta.appendChild(el("span", null, r.questions.length + "問" + (maxOf(r) !== r.questions.length ? "（" + maxOf(r) + "点）" : "") + "・約" + roundMinutes(r) + "分"));
         var rec = me.scores[r.id];
-        if (done) {
+        var prog = progGet(r);
+        if (prog) {
+          meta.appendChild(el("span", "round-prog", "途中（" + progLabel(prog) + "）・続きから解けます"));
+        } else if (done) {
           meta.appendChild(el("span", "clear-badge", "✓ クリア"));
         } else if (me.name && rec && rec.count) {
           meta.appendChild(el("span", "round-last", "最高 " + rec.best + " / " + maxOf(r) + "（前回 " + rec.last + "・" + rec.lastDate + "）"));
@@ -803,7 +809,10 @@
         }
         b.appendChild(meta);
         if (done) b.setAttribute("aria-label", labelOf(r) + " " + r.title + "（クリア済み・もう一度解けます）");
-        b.addEventListener("click", function () { startRound(r, null); });
+        b.addEventListener("click", function () {
+          var p = progGet(r);
+          if (p) askResume(r, p); else startRound(r, null);
+        });
         list.appendChild(b);
       });
       $("progress").hidden = !me.name;
@@ -833,6 +842,66 @@
         body.appendChild(tr);
       });
       box.hidden = false;
+    }
+
+    // ---- 途中保存（この端末に。1問答えるごとに保存し、結果を記録できたら消す） ----
+    // 画面を閉じても、iPhone がページを読み込み直しても、トップの回の一覧から続きを解ける。
+    // 書いて答える問題は、書きかけの文も保存する。問題が直されて中身が変わった回の途中保存は使わない
+    var PROG_KEY = "is-kakunin-test-progress";
+    var PROG_DAYS = 14;   // これより前の途中保存は使わない
+    function progAll() { try { return JSON.parse(localStorage.getItem(PROG_KEY) || "{}") || {}; } catch (e) { return {}; } }
+    function progWrite(all) { try { localStorage.setItem(PROG_KEY, JSON.stringify(all)); } catch (e) { /* 保存できなくても解ける */ } }
+    function progKey(r) { return me.name + "|" + r.id; }
+    function fingerprint(r) { return r.questions.length + ":" + r.questions.map(function (q) { return q.q + (q.choices || []).join(""); }).join("").length; }
+    function progGet(r) {
+      if (!me.name) return null;
+      var p = progAll()[progKey(r)];
+      if (!p || p.fp !== fingerprint(r) || !Array.isArray(p.order) || !Array.isArray(p.answers)) return null;
+      if (!p.answers.length && !p.draft) return null;
+      if (Date.now() - (p.at || 0) > PROG_DAYS * 86400000) return null;
+      if (p.order.some(function (i) { return !r.questions[i]; })) return null;
+      return p;
+    }
+    function progSave() {
+      if (!state || !me.name || state.done) return;
+      var all = progAll();
+      all[progKey(state.round)] = { fp: fingerprint(state.round), retry: state.retry, order: state.order,
+        answers: state.answers, draft: state.draft || null, at: Date.now() };
+      progWrite(all);
+    }
+    function progLabel(p) { return p.answers.length + " / " + p.order.length + "問" + (p.draft && p.draft.text ? "・書きかけあり" : ""); }
+    function progClear(r) { var all = progAll(); delete all[progKey(r)]; progWrite(all); }
+
+    function askResume(r, p) {
+      if ($("resumeBox")) $("resumeBox").remove();
+      var box = el("div", "leave-box");
+      box.id = "resumeBox";
+      box.setAttribute("role", "alertdialog");
+      box.appendChild(el("p", null, labelOf(r) + "「" + r.title + "」は途中まで解いています（" + progLabel(p) + "）。続きから解きますか？"));
+      var acts = el("div", "actions");
+      var yes = el("button", "btn", "続きから");
+      yes.type = "button";
+      yes.addEventListener("click", function () { box.remove(); resumeRound(r, p); });
+      var no = el("button", "btn ghost", "最初から");
+      no.type = "button";
+      no.addEventListener("click", function () { box.remove(); progClear(r); startRound(r, p.retry ? p.order : null); });
+      acts.appendChild(yes);
+      acts.appendChild(no);
+      box.appendChild(acts);
+      views.home.insertBefore(box, $("roundList"));
+      box.scrollIntoView({ behavior: "smooth", block: "center" });
+      yes.focus({ preventScroll: true });
+    }
+
+    function resumeRound(r, p) {
+      warm();
+      if ($("leaveBox")) $("leaveBox").remove();
+      state = { round: r, retry: !!p.retry, order: p.order, pos: Math.min(p.answers.length, p.order.length),
+        answers: p.answers, draft: p.draft || null, saved: false };
+      show("quiz");
+      if (state.pos >= state.order.length) { renderResult(); return; }   // 全部答えてあれば結果へ（記録もここで）
+      renderQuestion();
+      window.scrollTo(0, 0);
     }
 
     // ---- 出題 ----
@@ -915,6 +984,12 @@
         go.disabled = n < WRITE_MIN;
       });
       go.addEventListener("click", function () { showModel(q, ta, go); });
+      // 書きかけを途中保存。前に書きかけていた文があれば戻す
+      ta.addEventListener("input", function () { state.draft = { qi: state.current.qi, text: ta.value }; progSave(); });
+      if (state.draft && state.draft.qi === state.current.qi && state.draft.text) {
+        ta.value = state.draft.text;
+        ta.dispatchEvent(new Event("input"));
+      }
       if (window.matchMedia("(hover: hover)").matches) ta.focus({ preventScroll: true });
     }
 
@@ -986,6 +1061,8 @@
       var earned = writeEarned(q, checks);
       var ok = earned === ptsOf(q);
       state.answers.push({ qi: cur.qi, text: text, checks: checks, correct: ok, earned: earned });
+      state.draft = null;
+      progSave();
       grade.hidden = true;
       var head = fb.querySelector(".fb-head");
       head.className = "fb-head " + (ok ? "ok" : "ng");
@@ -1042,6 +1119,7 @@
       var picked = cur.shuffled[i];
       var ok = picked.correct;
       state.answers.push({ qi: cur.qi, choice: picked.text, correct: ok });
+      progSave();
 
       $("qChoices").querySelectorAll(".choice").forEach(function (b, j) {
         b.disabled = true;
@@ -1105,6 +1183,7 @@
       }, function (res) {
         st.saving = false;
         st.saved = true;
+        progClear(st.round);   // 記録できたので途中保存は消す（記録できないまま閉じても、次に開けば記録し直せる）
         if (res && res.scores) me.scores = res.scores;
         if (res && res.ranking) me.ranking = res.ranking;
         boardSet();
@@ -1126,6 +1205,8 @@
     // ---- 結果 ----
     function renderResult() {
       var r = state.round;
+      state.done = true;
+      if (!hasServer) progClear(r);
       var total = sumPts(r, state.answers.map(function (a) { return a.qi; }));
       var score = state.answers.reduce(function (n, a) { return n + (a.earned != null ? a.earned : (a.correct ? ptsOf(r.questions[a.qi]) : 0)); }, 0);
       var wasCleared = isCleared(r);
@@ -1207,7 +1288,7 @@
       var box = el("div", "leave-box");
       box.id = "leaveBox";
       box.setAttribute("role", "alertdialog");
-      box.appendChild(el("p", null, "途中ですが、回の選択に戻りますか？（ここまでの答えは記録されません）"));
+      box.appendChild(el("p", null, "途中ですが、回の選択に戻りますか？（ここまでの答えはこの端末に保存され、あとで続きから解けます）"));
       var acts = el("div", "actions");
       var yes = el("button", "btn", "戻る");
       yes.type = "button";
