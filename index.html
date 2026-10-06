@@ -250,6 +250,7 @@
   .login-msg.wait { color: var(--sub); }
   .login-note { font-size: 13px; color: var(--sub); margin: 0 0 24px; }
   .logging-in .top-home, .logging-in .who { display: none !important; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 </style>
 </head>
 <body>
@@ -267,14 +268,17 @@
   <section id="viewLogin" hidden>
     <h1>IS確認テスト</h1>
     <p class="lead">共用のパスワードを入れてください。わからないときはリーダーに聞いてください。</p>
-    <form class="login-box" id="loginForm" autocomplete="off" novalidate>
+    <form class="login-box" id="loginForm" action="#" method="post" novalidate>
+      <!-- iPhone などのパスワード保存（キーチェーン）に「IS確認テスト」として覚えてもらうための名前欄（画面には出さない） -->
+      <input class="sr-only" type="text" name="username" autocomplete="username" value="IS確認テスト" tabindex="-1" aria-hidden="true" readonly>
       <label for="pwInput">パスワード</label>
-      <input id="pwInput" type="password" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off">
+      <input id="pwInput" name="password" type="password" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="current-password">
       <label class="pw-show"><input type="checkbox" id="pwShow"> 表示する</label>
       <button class="btn" id="loginBtn" type="submit">入る</button>
       <p class="login-msg" id="loginMsg" aria-live="polite"></p>
     </form>
     <p class="login-note">同じスマホ・パソコンなら、次からは30日間パスワードを聞かれません。<br>
+      入ったあとに「パスワードを保存しますか？」と出たら「保存」を押すと、次からはパスワード欄をタップするだけで入れます（iPhone は Face ID）。<br>
       毎回聞かれるときは、Safari が「プライベート」になっていないか確かめるか、共有ボタン →「ホーム画面に追加」から開いてください。</p>
   </section>
   <section id="viewLoading" hidden>
