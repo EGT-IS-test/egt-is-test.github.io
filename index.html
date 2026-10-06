@@ -120,6 +120,13 @@
   .talk { border-left: 4px solid var(--blue); background: var(--panel); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 4px 0 12px; font-size: 14.5px; }
   .talk b { display: block; font-size: 12px; color: var(--blue); margin-bottom: 2px; }
   .src { font-size: 12.5px; color: var(--sub); margin: 0 !important; }
+  /* ほかの選択肢（まちがいの選択肢がそれぞれ何なのか） */
+  .others { margin: 2px 0 12px; padding: 10px 12px; background: var(--panel); border-radius: 8px; font-size: 14px; }
+  .others p.others-head { font-size: 12px; font-weight: 700; color: var(--sub); margin: 0 0 6px; }
+  .others p.other { margin: 0 0 8px; line-height: 1.55; }
+  .others p.other:last-child { margin-bottom: 0; }
+  .other-choice { display: block; color: var(--sub); }
+  .other-note { display: block; color: var(--ink); }
 
   .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
   .btn { border: 1.5px solid var(--blue); background: var(--blue); color: var(--white); font-weight: 700; border-radius: 999px; padding: 10px 22px; cursor: pointer; font-size: 15px; }
@@ -861,7 +868,7 @@
       state.current = { qi: qi, q: q, answered: false };
       if (isWrite(q)) { renderWrite(q); return; }
 
-      var shuffled = shuffle(q.choices.map(function (text, i) { return { text: text, correct: i === 0 }; }));
+      var shuffled = shuffle(q.choices.map(function (text, i) { return { text: text, correct: i === 0, oi: i }; }));
       state.current.shuffled = shuffled;
       shuffled.forEach(function (c, i) {
         var li = el("li");
@@ -994,7 +1001,24 @@
       afterAnswer();
     }
 
-    function explainBox(q) {
+    // ほかの選択肢：まちがいの選択肢それぞれが何なのか（問題データの notes。選択肢と同じ並びで、先頭＝正解は空）
+    // order＝画面に出した順（A〜Dの記号つきで出す）。ふりかえりでは元の並び。picked＝選んだ選択肢の元の番号
+    function othersBox(q, order, picked) {
+      if (!q.notes) return null;
+      var list = order || q.choices.map(function (t, i) { return { text: t, oi: i }; });
+      var box = el("div", "others");
+      box.appendChild(el("p", "others-head", "ほかの選択肢"));
+      list.forEach(function (c, j) {
+        if (c.oi === 0 || !q.notes[c.oi]) return;
+        var p = el("p", "other");
+        p.appendChild(el("span", "other-choice", (order ? LABELS[j] + "　" : "✕　") + c.text + (picked === c.oi ? "（あなたの答え）" : "")));
+        p.appendChild(el("span", "other-note", "→ " + q.notes[c.oi]));
+        box.appendChild(p);
+      });
+      return box;
+    }
+
+    function explainBox(q, extra) {
       var frag = document.createDocumentFragment();
       var p1 = el("p");
       p1.appendChild(el("span", "fb-label", "解説"));
@@ -1006,6 +1030,7 @@
         t.appendChild(document.createTextNode(q.talk));
         frag.appendChild(t);
       }
+      if (extra) frag.appendChild(extra);   // ほかの選択肢（出典の前に出す）
       frag.appendChild(el("p", "src", "出典：" + q.src));
       return frag;
     }
@@ -1035,7 +1060,7 @@
         p0.appendChild(document.createTextNode(cur.q.choices[0]));
         body.appendChild(p0);
       }
-      body.appendChild(explainBox(cur.q));
+      body.appendChild(explainBox(cur.q, othersBox(cur.q, cur.shuffled, picked.oi)));
       fb.appendChild(body);
       $("qFeedback").innerHTML = "";
       $("qFeedback").appendChild(fb);
@@ -1161,7 +1186,7 @@
           if (!a.correct) body.appendChild(el("p", "ans-you", "あなたの答え：" + a.choice));
           body.appendChild(el("p", "ans-ok", "正解：" + q.choices[0]));
         }
-        body.appendChild(explainBox(q));
+        body.appendChild(explainBox(q, isWrite(q) ? null : othersBox(q, null, q.choices.indexOf(a.choice))));
         d.appendChild(body);
         li.appendChild(d);
         list.appendChild(li);
